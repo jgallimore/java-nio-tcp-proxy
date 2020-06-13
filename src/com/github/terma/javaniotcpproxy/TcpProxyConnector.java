@@ -18,7 +18,9 @@ package com.github.terma.javaniotcpproxy;
 
 import com.github.terma.javaniotcpserver.TcpServerHandler;
 
+import javax.management.*;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.net.InetSocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SelectionKey;
@@ -27,7 +29,7 @@ import java.nio.channels.SocketChannel;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-class TcpProxyConnector implements TcpServerHandler {
+class TcpProxyConnector implements TcpServerHandler, TcpProxyConnectorMBean {
 
     private final static Logger LOGGER = Logger.getAnonymousLogger();
 
@@ -39,9 +41,29 @@ class TcpProxyConnector implements TcpServerHandler {
     private SocketChannel serverChannel;
     private TcpProxyConfig config;
 
+    private ObjectName mbeanName = null;
+
     public TcpProxyConnector(SocketChannel clientChannel, TcpProxyConfig config) {
         this.clientChannel = clientChannel;
         this.config = config;
+
+        try {
+            String objectName = "com.github.terma.javaniotcpproxy:Type=TcpProxyConnector" + "," +
+                    "localPort=" + config.getLocalPort() + "," +
+                    "remoteHost=" + config.getRemoteHost() + "," +
+                    "remotePort=" + config.getRemotePort() + "," +
+                    "client=" +  clientChannel.getRemoteAddress().toString().replaceAll(":", "_");
+
+            MBeanServer server = ManagementFactory.getPlatformMBeanServer();
+
+            // Construct the ObjectName for the Hello MBean we will register
+            mbeanName = new ObjectName(objectName);
+
+            TcpProxyConnectorMBean mbean = this;
+            server.registerMBean(mbean, mbeanName);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public void readFromClient() throws IOException {
@@ -139,6 +161,13 @@ class TcpProxyConnector implements TcpServerHandler {
     public void destroy() {
         closeQuietly(clientChannel);
         closeQuietly(serverChannel);
+
+        try {
+            final MBeanServer server = ManagementFactory.getPlatformMBeanServer();
+            server.unregisterMBean(mbeanName);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
 }
