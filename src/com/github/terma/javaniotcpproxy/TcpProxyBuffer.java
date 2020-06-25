@@ -18,8 +18,8 @@ package com.github.terma.javaniotcpproxy;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ByteChannel;
 import java.nio.channels.ClosedChannelException;
-import java.nio.channels.SocketChannel;
 
 class TcpProxyBuffer {
 
@@ -42,7 +42,7 @@ class TcpProxyBuffer {
         return state == BufferState.READY_TO_WRITE;
     }
 
-    public void writeFrom(SocketChannel channel) throws IOException {
+    public void writeFrom(ByteChannel channel) throws IOException {
         int read = channel.read(buffer);
         if (read == -1) throw new ClosedChannelException();
 
@@ -60,7 +60,7 @@ class TcpProxyBuffer {
      * @param channel - channel
      * @throws IOException
      */
-    public void writeTo(SocketChannel channel) throws IOException {
+    public void writeTo(ByteChannel channel) throws IOException {
         channel.write(buffer);
 
         // only if buffer is empty
@@ -68,6 +68,38 @@ class TcpProxyBuffer {
             buffer.clear();
             state = BufferState.READY_TO_WRITE;
         }
+    }
+
+    public boolean contains(final byte[] input) {
+        if (input == null){
+            return false;
+        }
+
+        if (input.length > buffer.remaining()) {
+            return false;
+        }
+
+        final byte[] bytes = buffer.array();
+
+        boolean found = false;
+        for (int i = buffer.position(); i < buffer.limit() - input.length; i++) {
+            found = true;
+            for (int j = 0; j < input.length; j++) {
+                if (bytes[i + j] != input[j]) {
+                    found = false;
+                }
+
+                if (!found) {
+                    break;
+                }
+            }
+
+            if (found) {
+                break;
+            }
+        }
+
+        return found;
     }
 
 }

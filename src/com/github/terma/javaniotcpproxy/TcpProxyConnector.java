@@ -18,19 +18,28 @@ package com.github.terma.javaniotcpproxy;
 
 import com.github.terma.javaniotcpserver.TcpServerHandler;
 
-import javax.management.*;
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.net.InetSocketAddress;
+import java.nio.channels.ByteChannel;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 class TcpProxyConnector implements TcpServerHandler, TcpProxyConnectorMBean {
 
+    //
+    // TODO: wire up file channel to receive debug output
+    // TODO: options to halt the stream immediately, or at a certain point (pattern, or number of bytes?)
+    //
+
+    private final static byte[] TLS_CLIENT_HELLO = new byte[] { 0x01, 0x00, 0x00, (byte) 0xb5, 0x03, 0x03 };
     private final static Logger LOGGER = Logger.getAnonymousLogger();
 
     private final TcpProxyBuffer clientBuffer = new TcpProxyBuffer();
@@ -40,6 +49,8 @@ class TcpProxyConnector implements TcpServerHandler, TcpProxyConnectorMBean {
     private Selector selector;
     private SocketChannel serverChannel;
     private TcpProxyConfig config;
+    private AtomicBoolean killed = new AtomicBoolean(false);
+    private AtomicBoolean serverHung = new AtomicBoolean(false);
 
     private ObjectName mbeanName = null;
 
@@ -67,26 +78,51 @@ class TcpProxyConnector implements TcpServerHandler, TcpProxyConnectorMBean {
     }
 
     public void readFromClient() throws IOException {
+        if (killed.get()) {
+            return;
+        }
+        
         serverBuffer.writeFrom(clientChannel);
         if (serverBuffer.isReadyToRead()) register();
     }
 
     public void readFromServer() throws IOException {
+        if (killed.get()) {
+            return;
+        }
+
         clientBuffer.writeFrom(serverChannel);
         if (clientBuffer.isReadyToRead()) register();
     }
 
     public void writeToClient() throws IOException {
+        if (killed.get()) {
+            return;
+        }
+
         clientBuffer.writeTo(clientChannel);
         if (clientBuffer.isReadyToWrite()) register();
     }
 
     public void writeToServer() throws IOException {
+        if (killed.get() || serverHung.get()) {
+            return;
+        }
+
         serverBuffer.writeTo(serverChannel);
-        if (serverBuffer.isReadyToWrite()) register();
+
+        // This should have the effect of - if the buffer contains a TLS Client Hello packet,
+        // we'll write it, but then we'll hang the connection.
+        if (! serverBuffer.contains(TLS_CLIENT_HELLO)) {
+            serverHung.set(true);
+        }
     }
 
     public void register() throws ClosedChannelException {
+        if (killed.get()) {
+            return;
+        }
+
         int clientOps = 0;
         if (serverBuffer.isReadyToWrite()) clientOps |= SelectionKey.OP_READ;
         if (clientBuffer.isReadyToRead()) clientOps |= SelectionKey.OP_WRITE;
@@ -98,7 +134,7 @@ class TcpProxyConnector implements TcpServerHandler, TcpProxyConnectorMBean {
         serverChannel.register(selector, serverOps, this);
     }
 
-    private static void closeQuietly(SocketChannel channel) {
+    private static void closeQuietly(ByteChannel channel) {
         if (channel != null) {
             try {
                 channel.close();
@@ -134,6 +170,11 @@ class TcpProxyConnector implements TcpServerHandler, TcpProxyConnectorMBean {
 
     @Override
     public void process(final SelectionKey key) {
+
+        if (killed.get()) {
+            return;
+        }
+
         try {
             if (key.channel() == clientChannel) {
                 if (key.isValid() && key.isReadable()) readFromClient();
@@ -168,6 +209,18 @@ class TcpProxyConnector implements TcpServerHandler, TcpProxyConnectorMBean {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    @Override
+    public void killServer() {
+        killed.set(true);
+        closeQuietly(serverChannel);
+    }
+
+    @Override
+    public void killClient() {
+        killed.set(true);
+        closeQuietly(clientChannel);
     }
 
 }

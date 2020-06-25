@@ -18,4 +18,6 @@ package com.github.terma.javaniotcpproxy;
 
 public interface TcpProxyConnectorMBean {
     void destroy();
+    void killServer();
+    void killClient();
 }
